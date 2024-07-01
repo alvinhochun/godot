@@ -394,7 +394,7 @@ void RasterizerGLES3::_blit_render_target_to_screen(RID p_render_target, Display
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLES3::TextureStorage::system_fbo);
 
 	if (p_first) {
-		if (p_screen_rect.position != Vector2() || p_screen_rect.size != rt->size || p_screen_rect.size != p_viewport_size) {
+		if (p_screen_rect.position != Vector2() || p_screen_rect.size != rt->size || (p_viewport_size != Size2i() && p_screen_rect.size != p_viewport_size)) {
 			// Viewport doesn't cover entire window so clear window to black before blitting.
 			// Querying the actual window size from the DisplayServer would deadlock in separate render thread mode,
 			// so let's set the biggest viewport the implementation supports, to be sure the window is fully covered.
@@ -416,7 +416,10 @@ void RasterizerGLES3::_blit_render_target_to_screen(RID p_render_target, Display
 	}
 
 	// OpenGL use bottom-left as origin, not top-left
-	int y_off = p_viewport_size.y - p_screen_rect.size.y;
+	int y_off = 0;
+	if (p_viewport_size.y != 0) {
+		y_off = p_viewport_size.y - p_screen_rect.size.y;
+	}
 	glBlitFramebuffer(0, 0, rt->size.x, rt->size.y,
 			flip_x ? screen_rect_end.x : p_screen_rect.position.x, (flip_y ? screen_rect_end.y : p_screen_rect.position.y) + y_off,
 			flip_x ? p_screen_rect.position.x : screen_rect_end.x, (flip_y ? p_screen_rect.position.y : screen_rect_end.y) + y_off,
@@ -430,7 +433,10 @@ void RasterizerGLES3::_blit_render_target_to_screen(RID p_render_target, Display
 
 // is this p_screen useless in a multi window environment?
 void RasterizerGLES3::blit_render_targets_to_screen(DisplayServer::WindowID p_screen, const BlitToScreen *p_render_targets, int p_amount) {
-	Size2i viewport_size = DisplayServer::get_singleton()->window_get_size(p_screen);
+	Size2i viewport_size;
+	if (p_screen != DisplayServer::INVALID_WINDOW_ID) {
+		viewport_size = DisplayServer::get_singleton()->window_get_size(p_screen);
+	}
 	for (int i = 0; i < p_amount; i++) {
 		const BlitToScreen &blit = p_render_targets[i];
 
