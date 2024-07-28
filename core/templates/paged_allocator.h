@@ -40,12 +40,33 @@
 #include <type_traits>
 #include <typeinfo>
 
+#ifdef SANITIZERS_ENABLED
+#include <sanitizer/asan_interface.h>
+#ifdef __has_feature
+#if __has_feature(address_sanitizer)
+#define ASAN_ENABLED
+#endif
+#elif defined(__SANITIZE_ADDRESS__)
+#define ASAN_ENABLED
+#endif
+#endif
+
 template <typename T, bool thread_safe = false, uint32_t DEFAULT_PAGE_SIZE = 4096>
 class PagedAllocator {
 	T **page_pool = nullptr;
 	T ***available_pool = nullptr;
 	uint32_t pages_allocated = 0;
 	uint32_t allocs_available = 0;
+#ifdef ASAN_ENABLED
+	// `available_pool` is normally used like a stack, in which the top pointer
+	// is popped for alloc, and a freed pointer is pushed to the top. This
+	// means the top pointers may be rapidly reused during repeated freeing
+	// allocing, which will make detecting use-after-free ineffective.
+	// To alleviate this, we change `available_pool` to be a ring buffer,
+	// so that newly freed pointers are enqueued at the bottom and we hand
+	// out pointers in a round-robin way.
+	uint32_t available_pool_tail = 0;
+#endif
 
 	uint32_t page_shift = 0;
 	uint32_t page_mask = 0;
@@ -58,7 +79,14 @@ public:
 		if (thread_safe) {
 			spin_lock.lock();
 		}
+#ifndef ASAN_ENABLED
 		if (unlikely(allocs_available == 0)) {
+#else
+		// We keep an extra page unused to allow recently freed pointers
+		// to be quarantined, so that we have a higher chance of catching
+		// use-after-free errors.
+		while (unlikely(allocs_available <= page_size)) {
+#endif
 			uint32_t pages_used = pages_allocated;
 
 			pages_allocated++;
@@ -68,14 +96,41 @@ public:
 			page_pool[pages_used] = (T *)memalloc(sizeof(T) * page_size);
 			available_pool[pages_used] = (T **)memalloc(sizeof(T *) * page_size);
 
+#ifndef ASAN_ENABLED
 			for (uint32_t i = 0; i < page_size; i++) {
 				available_pool[0][i] = &page_pool[pages_used][i];
+#else
+			if (available_pool_tail + allocs_available > (pages_used << page_shift)) {
+				for (uint32_t i = (pages_used << page_shift) - 1; i >= available_pool_tail; i--) {
+					available_pool[(i >> page_shift) + 1][i & page_mask] = available_pool[i >> page_shift][i & page_mask];
+				}
+				available_pool_tail += page_size;
+			}
+			int index = available_pool_tail + allocs_available;
+			for (uint32_t i = 0; i < page_size; i++, index++) {
+				if (index >= pages_allocated << page_shift) {
+					index -= pages_allocated << page_shift;
+				}
+				available_pool[index >> page_shift][index & page_mask] = &page_pool[pages_used][i];
+#endif
 			}
 			allocs_available += page_size;
+#ifdef ASAN_ENABLED
+			__asan_poison_memory_region(page_pool[pages_used], sizeof(T) * page_size);
+#endif
 		}
 
 		allocs_available--;
+#ifndef ASAN_ENABLED
 		T *alloc = available_pool[allocs_available >> page_shift][allocs_available & page_mask];
+#else
+		int index = allocs_available + available_pool_tail;
+		if (index >= pages_allocated << page_shift) {
+			index -= pages_allocated << page_shift;
+		}
+		T *alloc = available_pool[index >> page_shift][index & page_mask];
+		__asan_unpoison_memory_region(alloc, sizeof(T));
+#endif
 		if (thread_safe) {
 			spin_lock.unlock();
 		}
@@ -88,7 +143,17 @@ public:
 			spin_lock.lock();
 		}
 		p_mem->~T();
+#ifndef ASAN_ENABLED
 		available_pool[allocs_available >> page_shift][allocs_available & page_mask] = p_mem;
+#else
+		if (available_pool_tail == 0) {
+			available_pool_tail = pages_allocated << page_shift;
+		}
+		available_pool_tail--;
+		int index = available_pool_tail;
+		available_pool[index >> page_shift][index & page_mask] = p_mem;
+		__asan_poison_memory_region(p_mem, sizeof(T));
+#endif
 		allocs_available++;
 		if (thread_safe) {
 			spin_lock.unlock();
