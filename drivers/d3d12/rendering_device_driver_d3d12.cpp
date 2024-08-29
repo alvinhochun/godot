@@ -2464,6 +2464,11 @@ RDD::SwapChainID RenderingDeviceDriverD3D12::swap_chain_create(RenderingContextD
 	attachment.load_op = RDD::ATTACHMENT_LOAD_OP_CLEAR;
 	attachment.store_op = RDD::ATTACHMENT_STORE_OP_STORE;
 
+	// FIXME: If we are setting the render pass attachment format here, then we should also change it when HDR output is toggled.
+	if (context_driver->surface_get_hdr_output_enabled(p_surface)) {
+		attachment.format = DATA_FORMAT_A2B10G10R10_UNORM_PACK32;
+	}
+
 	RDD::Subpass subpass;
 	RDD::AttachmentReference color_ref;
 	color_ref.attachment = 0;
@@ -2521,10 +2526,20 @@ Error RenderingDeviceDriverD3D12::swap_chain_resize(CommandQueueID p_cmd_queue, 
 
 	print_verbose("Using swap chain flags: " + itos(creation_flags) + ", sync interval: " + itos(sync_interval) + ", present flags: " + itos(present_flags));
 
-	if (swap_chain->d3d_swap_chain != nullptr && creation_flags != swap_chain->creation_flags) {
-		// The swap chain must be recreated if the creation flags are different.
+	RDD::DataFormat new_data_format;
+	if (context_driver->surface_get_hdr_output_enabled(swap_chain->surface)) {
+		// DXGI_FORMAT_R10G10B10A2_UNORM for DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+		new_data_format = DATA_FORMAT_A2B10G10R10_UNORM_PACK32;
+	} else {
+		new_data_format = DATA_FORMAT_R8G8B8A8_UNORM;
+	}
+
+	if (swap_chain->d3d_swap_chain != nullptr && (creation_flags != swap_chain->creation_flags || new_data_format != swap_chain->data_format)) {
+		// The swap chain must be recreated if the creation flags or data format are different.
 		_swap_chain_release(swap_chain);
 	}
+
+	swap_chain->data_format = new_data_format;
 
 	DXGI_SWAP_CHAIN_DESC1 swap_chain_desc = {};
 	if (swap_chain->d3d_swap_chain != nullptr) {
@@ -2558,6 +2573,12 @@ Error RenderingDeviceDriverD3D12::swap_chain_resize(CommandQueueID p_cmd_queue, 
 
 		swap_chain_1.As(&swap_chain->d3d_swap_chain);
 		ERR_FAIL_NULL_V(swap_chain->d3d_swap_chain, ERR_CANT_CREATE);
+
+		if (swap_chain->data_format == DATA_FORMAT_A2B10G10R10_UNORM_PACK32) {
+			print_verbose("D3D12: Set HDR swap chain color space to BT.2020 (ST2084 PQ)");
+			res = swap_chain->d3d_swap_chain->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+			ERR_FAIL_COND_V(!SUCCEEDED(res), ERR_CANT_CREATE);
+		}
 
 		res = context_driver->dxgi_factory_get()->MakeWindowAssociation(surface->hwnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
 		ERR_FAIL_COND_V(!SUCCEEDED(res), ERR_CANT_CREATE);
@@ -2643,7 +2664,16 @@ RDD::DataFormat RenderingDeviceDriverD3D12::swap_chain_get_format(SwapChainID p_
 }
 
 RDD::ColorSpace RenderingDeviceDriverD3D12::swap_chain_get_color_space(SwapChainID p_swap_chain) {
-	return RDD::COLOR_SPACE_SRGB_NONLINEAR;
+	const SwapChain *swap_chain = (const SwapChain *)(p_swap_chain.id);
+	switch (swap_chain->data_format) {
+		case DATA_FORMAT_A2B10G10R10_UNORM_PACK32:
+			return COLOR_SPACE_HDR10_ST2084;
+		case DATA_FORMAT_R8G8B8A8_UNORM:
+			return RDD::COLOR_SPACE_SRGB_NONLINEAR;
+		default:
+			DEV_ASSERT(false && "Unknown swap chain color space.");
+			return COLOR_SPACE_MAX;
+	}
 }
 
 void RenderingDeviceDriverD3D12::swap_chain_free(SwapChainID p_swap_chain) {
