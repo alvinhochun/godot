@@ -6435,6 +6435,128 @@ DisplayServerWindows::DisplayServerWindows(const String &p_rendering_driver, Win
 
 	static_cast<OS_Windows *>(OS::get_singleton())->set_main_window(windows[MAIN_WINDOW_ID].hWnd);
 	Input::get_singleton()->set_event_dispatch_function(_dispatch_input_events);
+
+	// DEBUG
+	if (is_print_verbose_enabled()) {
+		print_line("");
+		print_line("- Monitor debug info -");
+		auto print_monitor_info = []() {
+			Vector<DISPLAYCONFIG_PATH_INFO> paths;
+			Vector<DISPLAYCONFIG_MODE_INFO> modes;
+			LONG res;
+			do {
+				UINT32 num_paths;
+				UINT32 num_modes;
+
+				res = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &num_paths, &num_modes);
+				if (res != ERROR_SUCCESS) {
+					print_error(vformat("error: 0x%08X", (int)res));
+					return;
+				}
+
+				paths.resize(num_paths);
+				modes.resize(num_modes);
+
+				res = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &num_paths, paths.ptrw(), &num_modes, modes.ptrw(), nullptr);
+				if (res == ERROR_SUCCESS) {
+					paths.resize(num_paths);
+					modes.resize(num_modes);
+				}
+			} while (res == ERROR_INSUFFICIENT_BUFFER); // Retry in case of race condition.
+
+			if (res != ERROR_SUCCESS) {
+				print_error(vformat("error: 0x%08X", (int)res));
+				return;
+			}
+
+			for (const DISPLAYCONFIG_PATH_INFO &path : paths) {
+				{
+					DISPLAYCONFIG_SOURCE_DEVICE_NAME src_name = {};
+					src_name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+					src_name.header.size = sizeof(src_name);
+					src_name.header.adapterId = path.sourceInfo.adapterId;
+					src_name.header.id = path.sourceInfo.id;
+					res = DisplayConfigGetDeviceInfo(&src_name.header);
+					if (res != ERROR_SUCCESS) {
+						print_error(vformat("error: 0x%08X", (int)res));
+						continue;
+					}
+
+					print_line("Source name    :", String::utf16((const char16_t *)src_name.viewGdiDeviceName, 32));
+				}
+
+				{
+					DISPLAYCONFIG_TARGET_DEVICE_NAME dev_name = {};
+					dev_name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+					dev_name.header.size = sizeof(dev_name);
+					dev_name.header.adapterId = path.targetInfo.adapterId;
+					dev_name.header.id = path.targetInfo.id;
+					res = DisplayConfigGetDeviceInfo(&dev_name.header);
+					if (res != ERROR_SUCCESS) {
+						print_error(vformat("error: 0x%08X", (int)res));
+						continue;
+					}
+
+					print_line("monitor dev    :", String::utf16((const char16_t *)dev_name.monitorFriendlyDeviceName, 64));
+					print_line("monitor path   :", String::utf16((const char16_t *)dev_name.monitorDevicePath, 128));
+					switch (dev_name.outputTechnology) {
+						case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_HDMI:
+							print_line("output         : HDMI");
+							break;
+						case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EXTERNAL:
+							print_line("output         : DisplayPort");
+							break;
+						case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED:
+							print_line("output         : DisplayPort (embedded)");
+							break;
+						case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL:
+							print_line("output         : Internal");
+							break;
+						case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_MIRACAST:
+							print_line("output         : Miracast");
+							break;
+						default:
+							print_line("output         : Other - ", dev_name.outputTechnology);
+							break;
+					}
+				}
+
+				{
+					DISPLAYCONFIG_SDR_WHITE_LEVEL sdr_white_level = {};
+					sdr_white_level.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL;
+					sdr_white_level.header.size = sizeof(sdr_white_level);
+					sdr_white_level.header.adapterId = path.targetInfo.adapterId;
+					sdr_white_level.header.id = path.targetInfo.id;
+					res = DisplayConfigGetDeviceInfo(&sdr_white_level.header);
+					if (res != ERROR_SUCCESS) {
+						print_error(vformat("error: 0x%08X", (int)res));
+						continue;
+					}
+
+					print_line("SDR white level:", (float)sdr_white_level.SDRWhiteLevel * 80.0f / 1000.0f, "nits");
+				}
+
+				print_line("");
+			}
+
+			struct MyMonitorEnumProc {
+				static BOOL CALLBACK func(HMONITOR hMonitor, HDC hDC, LPRECT rect, LPARAM param) {
+					print_line(vformat("hMonitor 0x%08X", (uintptr_t)hMonitor));
+					MONITORINFOEXW monitor_info_ex = {};
+					monitor_info_ex.cbSize = sizeof(monitor_info_ex);
+					if (GetMonitorInfoW(hMonitor, &monitor_info_ex)) {
+						print_line("szDevice:", String::utf16((const char16_t *)monitor_info_ex.szDevice, 32));
+					}
+					return TRUE;
+				}
+			};
+
+			EnumDisplayMonitors(nullptr, nullptr, MyMonitorEnumProc::func, 0);
+
+			print_line("");
+		};
+		print_monitor_info();
+	}
 }
 
 Vector<String> DisplayServerWindows::get_rendering_drivers_func() {
