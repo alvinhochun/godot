@@ -6617,6 +6617,60 @@ Error RenderingDeviceDriverD3D12::_check_capabilities() {
 		print_verbose("- Depth bounds test not supported");
 	}
 
+	// DEBUG
+	if (is_print_verbose_enabled()) {
+		print_line("");
+		print_line("- DXGI Outputs -");
+
+		ComPtr<IDXGIOutput> dxgi_output;
+		// FIXME: Using just one adapter doesn't work on NVIDIA Optimus!
+		for (int i = 0; (res = adapter->EnumOutputs(i, &dxgi_output)) != DXGI_ERROR_NOT_FOUND; i++) {
+			if (!SUCCEEDED(res)) {
+				print_error(vformat("EnumOutputs failed: 0x%08X", (int)res));
+				break;
+			}
+
+			ComPtr<IDXGIOutput6> dxgi_output_6;
+			res = dxgi_output.As(&dxgi_output_6);
+			if (!SUCCEEDED(res)) {
+				print_error(vformat("Failed to get IDXGIOutput6: 0x%08X", (int)res));
+				continue;
+			}
+
+			DXGI_OUTPUT_DESC1 desc1;
+			res = dxgi_output_6->GetDesc1(&desc1);
+			if (!SUCCEEDED(res)) {
+				print_error(vformat("Failed to get DXGI_OUTPUT_DESC1: 0x%08X", (int)res));
+				continue;
+			}
+
+			print_line("Device Name:", String::utf16((const char16_t *)desc1.DeviceName, 32));
+			print_line(vformat("hMonitor: 0x%08X", (uintptr_t)desc1.Monitor));
+			print_line("Bits per color:", desc1.BitsPerColor);
+			switch (desc1.ColorSpace) {
+				case DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709:
+					print_line("Color space: sRGB (SDR)");
+					break;
+				case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
+					print_line("Color space: BT.2020 ST2084 PQ (HDR)");
+					break;
+				default:
+					print_line("Color space: Other -", desc1.ColorSpace);
+					break;
+			}
+			print_line("RedPrimary:", desc1.RedPrimary[0], desc1.RedPrimary[1]);
+			print_line("GreenPrimary:", desc1.GreenPrimary[0], desc1.GreenPrimary[1]);
+			print_line("BluePrimary:", desc1.BluePrimary[0], desc1.BluePrimary[1]);
+			print_line("WhitePoint:", desc1.WhitePoint[0], desc1.WhitePoint[1]);
+			print_line("MinLuminance:", desc1.MinLuminance);
+			print_line("MaxLuminance:", desc1.MaxLuminance);
+			print_line("MaxFullFrameLuminance:", desc1.MaxFullFrameLuminance);
+			print_line("");
+		}
+
+		print_line("");
+	}
+
 	return OK;
 }
 
