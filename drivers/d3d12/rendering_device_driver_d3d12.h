@@ -521,6 +521,7 @@ private:
 
 	void _swap_chain_release(SwapChain *p_swap_chain);
 	void _swap_chain_release_buffers(SwapChain *p_swap_chain);
+	RenderPassID _swap_chain_create_render_pass(RDD::DataFormat p_format);
 
 public:
 	virtual SwapChainID swap_chain_create(RenderingContextDriver::SurfaceID p_surface) override;

@@ -278,7 +278,11 @@ DisplayServer::VSyncMode RenderingContextDriverD3D12::surface_get_vsync_mode(Sur
 
 void RenderingContextDriverD3D12::surface_set_hdr_output_enabled(SurfaceID p_surface, bool p_enabled) {
 	Surface *surface = (Surface *)(p_surface);
+	if (surface->hdr_output == p_enabled) {
+		return;
+	}
 	surface->hdr_output = p_enabled;
+	surface->needs_resize = true;
 }
 
 bool RenderingContextDriverD3D12::surface_get_hdr_output_enabled(SurfaceID p_surface) const {

@@ -2456,18 +2456,13 @@ void RenderingDeviceDriverD3D12::_swap_chain_release_buffers(SwapChain *p_swap_c
 	p_swap_chain->framebuffers.clear();
 }
 
-RDD::SwapChainID RenderingDeviceDriverD3D12::swap_chain_create(RenderingContextDriver::SurfaceID p_surface) {
+RDD::RenderPassID RenderingDeviceDriverD3D12::_swap_chain_create_render_pass(RDD::DataFormat p_format) {
 	// Create the render pass that will be used to draw to the swap chain's framebuffers.
 	RDD::Attachment attachment;
-	attachment.format = DATA_FORMAT_R8G8B8A8_UNORM;
+	attachment.format = p_format;
 	attachment.samples = RDD::TEXTURE_SAMPLES_1;
 	attachment.load_op = RDD::ATTACHMENT_LOAD_OP_CLEAR;
 	attachment.store_op = RDD::ATTACHMENT_STORE_OP_STORE;
-
-	// FIXME: If we are setting the render pass attachment format here, then we should also change it when HDR output is toggled.
-	if (context_driver->surface_get_hdr_output_enabled(p_surface)) {
-		attachment.format = DATA_FORMAT_A2B10G10R10_UNORM_PACK32;
-	}
 
 	RDD::Subpass subpass;
 	RDD::AttachmentReference color_ref;
@@ -2475,13 +2470,22 @@ RDD::SwapChainID RenderingDeviceDriverD3D12::swap_chain_create(RenderingContextD
 	color_ref.aspect.set_flag(RDD::TEXTURE_ASPECT_COLOR_BIT);
 	subpass.color_references.push_back(color_ref);
 
-	RenderPassID render_pass = render_pass_create(attachment, subpass, {}, 1);
+	return render_pass_create(attachment, subpass, {}, 1);
+}
+
+RDD::SwapChainID RenderingDeviceDriverD3D12::swap_chain_create(RenderingContextDriver::SurfaceID p_surface) {
+	RDD::DataFormat format = DATA_FORMAT_R8G8B8A8_UNORM;
+	if (context_driver->surface_get_hdr_output_enabled(p_surface)) {
+		format = DATA_FORMAT_A2B10G10R10_UNORM_PACK32;
+	}
+
+	RenderPassID render_pass = _swap_chain_create_render_pass(format);
 	ERR_FAIL_COND_V(!render_pass, SwapChainID());
 
 	// Create the empty swap chain until it is resized.
 	SwapChain *swap_chain = memnew(SwapChain);
 	swap_chain->surface = p_surface;
-	swap_chain->data_format = attachment.format;
+	swap_chain->data_format = format;
 	swap_chain->render_pass = render_pass;
 	return SwapChainID(swap_chain);
 }
@@ -2537,6 +2541,12 @@ Error RenderingDeviceDriverD3D12::swap_chain_resize(CommandQueueID p_cmd_queue, 
 	if (swap_chain->d3d_swap_chain != nullptr && (creation_flags != swap_chain->creation_flags || new_data_format != swap_chain->data_format)) {
 		// The swap chain must be recreated if the creation flags or data format are different.
 		_swap_chain_release(swap_chain);
+	}
+
+	if (new_data_format != swap_chain->data_format) {
+		render_pass_free(swap_chain->render_pass);
+		swap_chain->render_pass = _swap_chain_create_render_pass(new_data_format);
+		ERR_FAIL_COND_V(!swap_chain->render_pass, ERR_CANT_CREATE);
 	}
 
 	swap_chain->data_format = new_data_format;
